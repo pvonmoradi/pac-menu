@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=repology
+Comment=A dmenu-driven client for repology.org
+Exec=pac-menu -d
+Terminal=false
+Categories=Utility
+Type=Application
+

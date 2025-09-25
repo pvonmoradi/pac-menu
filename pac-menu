@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+#
+# Author: Pooya Moradi
+# Date : 2021-08-19
+# License: MIT
+# Description: A simple dmenu-driven client for repology.org
+# Dependencies: jq curl notify-send xdg-open
+#               dmenu | rofi | fuzzel
+# TODO apparently these are unsupported by API v1:
+#      - get package link on selection
+#      - multi-string package names sometimes don't work
+#      - fuzzy search for package name
+
+version=0.5
+user_agent="pac-menu-v$version" # client-id per ToS https://repology.org/api/v1
+selector_app="dmenu"            # rofi fuzzel
+selector_font="monospace-9"
+priority_repo="debian"          # distro to show first
+base_link="https://repology.org"
+query_menu_mode=0
+
+show_help() {
+    cat << EOF
+Display packaging status in different repositories via repology.org
+
+Usage: pac-menu [OPTIONS] PACKAGE-NAME
+Options:
+    -d : Use selector menu to enter package-name
+    -V : Print version
+    -h : Print help message
+EOF
+}
+
+selector() {
+    prompt_str="$1"
+    lines="$2"
+    local args=()
+    args+=(-i -p "$prompt_str" -l "$lines" -fn "$selector_font")
+    case $selector_app in
+        dmenu)
+            dmenu "${args[@]}"
+            ;;
+        rofi)
+            rofi -dmenu "${args[@]}"
+            ;;
+        fuzzel)
+            fuzzel --dmenu "${args[@]}"
+            ;;
+        *)
+            log error "unsupported selector app: $selector_app"
+            return 1
+            ;;
+    esac
+}
+
+get_response() {
+    local query="$1"
+    if ! query=$(jq -e -rn --arg q "$query" '$q | @uri'); then
+        return 1
+    fi
+    if ! curl --silent --fail --user-agent "$user_agent" \
+        --get "$base_link/api/v1/project/$query"; then
+        printf >&2 "Problem in connecting to %s\n" "$base_link"
+        notify-send -i package "pac-menu: $query" \
+            "Problem in connecting to $base_link\n"
+        return 1
+    fi
+}
+
+# FIXME API does not provide a fuzzy search for package name
+search() {
+    local query
+    query="$1"
+    # getting the response json
+    local response
+    if ! response=$(curl --silent --fail --user-agent "$user_agent" \
+        --get "$base_link/api/v1/projects/" \
+        --data-urlencode "search=$query"); then
+        printf >&2 "Problem in connecting to %s\n" "$base_link"
+        notify-send -i package "pac-menu: $query" \
+            "Problem in connecting to $base_link\n"
+        return 1
+    fi
+    jq -c . <<< "$response"
+}
+
+refine_query() {
+    local query="$1"
+    local search_res
+    if ! search_res=$(search "$query"); then
+        return 1
+    fi
+    if jq -e 'length == 0 | empty' <<< "$search_res"; then
+        printf >&2 "No package found by name: %s\n" "$query"
+        notify-send -i package "pac-menu: $query" \
+            "No package found by name: $query"
+        return 1
+    fi
+    if ! jq -r -e 'keys[]' <<< "$search_res" \
+        | selector "refine $query:" "6"; then
+        return 1
+    fi
+}
+
+process() {
+    local query
+    query="$1"
+
+    # first try to get the package listing with the passed query
+    local response
+    if ! response=$(get_response "$query"); then
+        return 1
+    fi
+
+    # refine the query if such package doesn't exist according to repology.org
+    if jq -e 'length == 0' <<< "$response"; then
+        if ! query=$(refine_query "$query"); then
+            return 1
+        fi
+        if ! response=$(get_response "$query"); then
+            return 1
+        fi
+    fi
+
+    # use symbols for package state
+    if ! response=$(jq -e --arg fav "$priority_repo" \
+        '.[].status
+            |= {newest      :   "✅", # ✔
+                outdated    :   "➖", # ‒
+                ignored     :   "i",  # i
+                unique      :   "U",  # U
+                devel       :   "⌨️", # 🖮
+                legacy      :   "🗿", # ⇩
+                incorrect   :   "❌", # ×
+                untrusted   :   "⚠️", # !
+                noscheme    :   "N",  # N
+                rolling     :   "❕"} # ↻
+                [.]
+                | sort_by([(.repo | (if (. | contains($fav)) then 0
+                                                             else 1 end)),
+                            .repo])
+                ' \
+        <<< "$response"); then
+        printf >&2 "Problem in filtering json response\n"
+        return 1
+    fi
+
+    local item
+    local visiblename status repo p_version summary
+    # instead of | or comma, we use U+001F: Information Separator One
+    item=$(jq -r '. [] | [.visiblename, .status, .repo, .version, .summary
+                   | select(. != null) ] | join("\u001F")' \
+        <<< "$response" \
+        | while IFS=$'\x1F' \
+            read -r visiblename status repo p_version summary; do
+            printf "%-30s %-s %-30s %-25s %s\n" \
+                "$visiblename" "$status" "$repo" "$p_version" "$summary"
+        done \
+        | {
+            printf "%-30s %-s %-30s %-25s %s\n" \
+                "Package" "◉" "Repository" "Version" "Summary"
+            cat
+        } \
+        | selector "$query:" "6")
+    local q_url
+    # FIXME return the url of selected project when API supports this
+    q_url="$item"
+
+    # open the package listing webpage regardless of the selection
+    [[ -z "$q_url" ]] && return 1
+    q_url="$base_link/project/$query/versions"
+    xdg-open "$q_url"
+}
+
+while getopts Vhd opt; do
+    case $opt in
+        h)
+            show_help
+            exit
+            ;;
+        V)
+            printf "%s\n" "$version"
+            exit
+            ;;
+        d)
+            query_menu_mode=1
+            ;;
+        *)
+            printf >&2 "Bad usage! Check -h\n"
+            exit 2
+            ;;
+    esac
+done
+shift "$((OPTIND - 1))"
+
+# capture query string
+if ((query_menu_mode)); then
+    if ! query=$(selector 'Repology [query]:' '1' < /dev/null); then
+        exit
+    fi
+    [[ -z "$query" ]] && exit 1
+else
+    query="$*"
+
+    if [[ -z "$query" ]]; then
+        show_help
+        exit 2
+    fi
+fi
+
+# sanitize the query
+query="${query// /-}"
+
+if ! q_url=$(process "$query"); then
+    exit 1
+fi
