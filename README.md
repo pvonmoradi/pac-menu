@@ -3,6 +3,10 @@ A simple (unofficial) bash client for [repology.org](https://repology.org/) to
 quickly check the packaging status of a package among differnt distributions of
 GNU/Linux or other supported repositories of repology.
 
+<p align="center">
+  <img src="docs/screencast.gif">
+</p>
+
 ## Dependencies
 - `jq curl notify-send xdg-open`
 - `dmenu | rofi | fuzzel` : only one is needed
