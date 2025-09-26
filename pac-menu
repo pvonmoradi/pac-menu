@@ -11,7 +11,7 @@
 #      - multi-string package names sometimes don't work
 #      - fuzzy search for package name
 
-version=0.5
+version=0.6
 user_agent="pac-menu-v$version" # client-id per ToS https://repology.org/api/v1
 selector_app="dmenu"            # rofi fuzzel
 selector_font="monospace-9"
@@ -90,7 +90,7 @@ refine_query() {
     if ! search_res=$(search "$query"); then
         return 1
     fi
-    if jq -e 'length == 0 | empty' <<< "$search_res"; then
+    if jq -e 'length == 0' &> /dev/null <<< "$search_res"; then
         printf >&2 "No package found by name: %s\n" "$query"
         notify-send -i package "pac-menu: $query" \
             "No package found by name: $query"
@@ -118,6 +118,12 @@ process() {
             return 1
         fi
         if ! response=$(get_response "$query"); then
+            return 1
+        fi
+        if jq -e 'length == 0' &> /dev/null <<< "$response"; then
+            printf >&2 "No package found by name: %s\n" "$query"
+            notify-send -i package "pac-menu: $query" \
+                "No package found by name: $query"
             return 1
         fi
     fi
