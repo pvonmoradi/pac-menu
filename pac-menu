@@ -4,18 +4,19 @@
 # Date : 2021-08-19
 # License: MIT
 # Description: A simple dmenu-driven client for repology.org
-# Dependencies: jq curl notify-send xdg-open
+# Dependencies: jq fq curl notify-send xdg-open
 #               dmenu | rofi | fuzzel
 # TODO apparently these are unsupported by API v1:
 #      - get package link on selection
 #      - multi-string package names sometimes don't work
 #      - fuzzy search for package name
 
-version=0.6
+version=0.7
 user_agent="pac-menu-v$version" # client-id per ToS https://repology.org/api/v1
 selector_app="dmenu"            # rofi fuzzel
 selector_font="monospace-9"
-priority_repo="debian"          # distro to show first
+priority_repo="debian"   # distro to show first
+use_custom_redirection=0 # ignore repology's project url for custom repos
 base_link="https://repology.org"
 query_menu_mode=0
 
@@ -82,6 +83,46 @@ search() {
         return 1
     fi
     jq -c . <<< "$response"
+}
+
+extract_project_url() {
+    local query="$1"
+    local repo="$2"
+    if [[ -z "$query" ]] || [[ -z "$repo" ]]; then
+        return 1
+    fi
+    local url="$base_link/project/$query/versions"
+    local resp_html
+
+    if ! resp_html=$(curl --silent --fail --user-agent "$user_agent" \
+        --get "$url"); then
+        printf >&2 "Problem in connecting to %s\n" "$url"
+        notify-send -i package "pac-menu: $query" \
+            "Problem in connecting to $url\n"
+        return 1
+    fi
+
+    # shellcheck disable=2016
+    # the filter here would probably break if repology UI changes
+    if ! fq -r --arg p "$repo" \
+        '.. | objects | select(."@id" == $p).td[1].a."@href"' \
+        <<< "$resp_html"; then
+        printf >&2 "Problem in filtering json response\n"
+        return 1
+    fi
+}
+
+get_custom_project_url() {
+    local query="$1"
+    local repo="$2"
+    case "$repo" in
+        *debian*)
+            printf "https://tracker.debian.org/pkg/%s" "$query"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 refine_query() {
@@ -171,10 +212,28 @@ process() {
     local q_url
     # FIXME return the url of selected project when API supports this
     q_url="$item"
-
-    # open the package listing webpage regardless of the selection
     [[ -z "$q_url" ]] && return 1
-    q_url="$base_link/project/$query/versions"
+
+    # for now, we extract the link from yet another GET request
+    repo=$(awk '{print $3}' <<< "$item")
+    if [[ "$repo" == "Repository" ]]; then
+        # set the URL to package listing webpage
+        q_url="$base_link/project/$query/versions"
+
+    elif ((use_custom_redirection)) \
+        && q_url=$(get_custom_project_url \
+            "$(awk '{print $1}' <<< "$item")" \
+            "$repo"); then
+        # first handle special cases where repology-reported project-url is less
+        # useful
+        # like using tracker.debian.org instead of packages.debian.org
+        :
+    else
+        # get repology project url via filtering project listing webpage
+        if ! q_url=$(extract_project_url "$query" "$repo"); then
+            return 1
+        fi
+    fi
     xdg-open "$q_url"
 }
 
