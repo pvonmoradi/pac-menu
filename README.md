@@ -18,7 +18,7 @@ sudo apt install jq fq curl libnotify-bin dmenu # or rofi/fuzzel
 ```
 
 ## Usage
-Check `repo-menu -h`:
+Check `pac-menu -h`:
 
 ```console
 Display packaging status in different repositories via repology.org
