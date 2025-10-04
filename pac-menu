@@ -11,7 +11,7 @@
 #      - multi-string package names sometimes don't work
 #      - fuzzy search for package name
 
-version=0.8
+version=0.9
 user_agent="pac-menu-v$version" # client-id per ToS https://repology.org/api/v1
 selector_app="dmenu"            # rofi fuzzel
 selector_font="monospace-9"
@@ -105,7 +105,7 @@ extract_project_url() {
     # shellcheck disable=2016
     # the filter here would probably break if repology UI changes
     if ! fq -r --arg p "$repo" \
-         '(.. | objects | select(."@id" == $p).td[1].a."@href")
+        '(.. | objects | select(."@id" == $p).td[1].a."@href")
           // error("href not found for " + $p)' \
         <<< "$resp_html"; then
         printf >&2 "Problem in filtering json response\n"
@@ -197,7 +197,8 @@ process() {
     local visiblename status repo p_version summary
     # instead of | or comma, we use U+001F: Information Separator One
     item=$(jq -r '. [] | [.visiblename, .status, .repo, .version, .summary
-                   | select(. != null) ] | join("\u001F")' \
+                   | select(. != null) ] | map(gsub("\\n"; " "))
+                   | join("\u001F")' \
         <<< "$response" \
         | while IFS=$'\x1F' \
             read -r visiblename status repo p_version summary; do
